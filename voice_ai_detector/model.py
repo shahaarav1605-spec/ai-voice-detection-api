@@ -1,10 +1,9 @@
-import os
-import pickle
 import librosa
 import numpy as np
+import pickle
+import os
 
-BASE_DIR = os.path.dirname(__file__)
-MODEL_PATH = os.path.join(BASE_DIR, "model.pkl")
+MODEL_PATH = "voice_ai_detector/model.pkl"
 
 
 def extract_features(audio_path):
@@ -26,4 +25,5 @@ def extract_features(audio_path):
 def load_model():
     with open(MODEL_PATH, "rb") as f:
         return pickle.load(f)
+
 

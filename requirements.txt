@@ -3,4 +3,5 @@ uvicorn
 librosa
 numpy
 scikit-learn
+soundfile
 
