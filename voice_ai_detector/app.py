@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header
 import base64
 import tempfile
 import os
@@ -14,11 +14,14 @@ app = FastAPI(title="AI-Generated Voice Detection API")
 
 
 @app.post("/api/voice-detection")
-def detect_voice(payload: dict, x_api_key: str = Header(None)):
-
-    print("DEBUG HEADER x_api_key =", x_api_key)
-    print("DEBUG SERVER API_KEY =", API_KEY)
-
+def detect_voice(
+    payload: dict,
+    x_api_key: str = Header(None, alias="x-api-key")  # 🔴 THIS IS THE FIX
+):
+    # -------- DEBUG (KEEP THIS FOR NOW) --------
+    print("HEADER RECEIVED:", x_api_key)
+    print("SERVER API KEY:", API_KEY)
+    # -------------------------------------------
 
     # -------- API KEY CHECK --------
     if x_api_key != API_KEY:
@@ -27,47 +30,50 @@ def detect_voice(payload: dict, x_api_key: str = Header(None)):
             "message": "Invalid API key or malformed request"
         }
 
+    # -------- PAYLOAD VALIDATION --------
+    language = payload.get("language")
+    audio_format = payload.get("audioFormat")
+    audio_base64 = payload.get("audioBase64")
+
+    if not language or not audio_format or not audio_base64:
+        return {
+            "status": "error",
+            "message": "Missing required fields"
+        }
+
+    if language not in SUPPORTED_LANGUAGES:
+        return {
+            "status": "error",
+            "message": "Unsupported language"
+        }
+
+    if audio_format.lower() != "mp3":
+        return {
+            "status": "error",
+            "message": "Only mp3 format supported"
+        }
+
+    # -------- AUDIO PROCESSING --------
     try:
-        # -------- READ INPUT --------
-        language = payload["language"]
-        audio_format = payload["audioFormat"]
-        audio_base64 = payload["audioBase64"]
-
-        # -------- VALIDATION --------
-        if language not in SUPPORTED_LANGUAGES:
-            raise ValueError("Unsupported language")
-
-        if audio_format.lower() != "mp3":
-            raise ValueError("Only MP3 format is supported")
-
-        # -------- BASE64 → FILE --------
         audio_bytes = base64.b64decode(audio_base64)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
             tmp.write(audio_bytes)
-            temp_path = tmp.name
+            audio_path = tmp.name
 
-        # -------- FEATURE EXTRACTION --------
-        features = extract_features(temp_path)
+        features = extract_features(audio_path)
+        os.remove(audio_path)
 
-        os.remove(temp_path)
-
-        # -------- MODEL PREDICTION --------
         model = load_model()
         prediction = model.predict(features)[0]
         confidence = float(model.predict_proba(features)[0].max())
 
-        # -------- RESPONSE --------
         return {
             "status": "success",
             "language": language,
             "classification": "AI_GENERATED" if prediction == 1 else "HUMAN",
             "confidenceScore": round(confidence, 2),
-            "explanation": (
-                "Unnatural pitch consistency and robotic speech patterns detected"
-                if prediction == 1
-                else "Natural speech variations and human-like prosody detected"
-            )
+            "explanation": "Unnatural pitch consistency detected"
         }
 
     except Exception as e:
@@ -75,4 +81,3 @@ def detect_voice(payload: dict, x_api_key: str = Header(None)):
             "status": "error",
             "message": str(e)
         }
-    
