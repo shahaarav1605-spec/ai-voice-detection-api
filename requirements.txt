@@ -1,7 +1,7 @@
 fastapi
 uvicorn
-librosa
 numpy
+librosa
 scikit-learn
+joblib
 soundfile
-

@@ -1,83 +1,80 @@
-from fastapi import FastAPI, Header
 import base64
 import tempfile
-import os
-
+import numpy as np
+from fastapi import FastAPI, Header, HTTPException
+from pydantic import BaseModel
 from voice_ai_detector.model import extract_features, load_model
 
-# ================= CONFIG =================
-API_KEY = "my_voice_api_123"
-SUPPORTED_LANGUAGES = ["Tamil", "English", "Hindi", "Malayalam", "Telugu"]
-# ==========================================
+app = FastAPI(title="AI Generated Voice Detection API")
 
-app = FastAPI(title="AI-Generated Voice Detection API")
+model = load_model()
+
+
+class VoiceRequest(BaseModel):
+    language: str
+    audioFormat: str
+    audioBase64: str
+
+
+def generate_reason(label, raw):
+    reasons = []
+
+    if raw["pitch"] < 80:
+        reasons.append("very stable pitch")
+
+    if raw["zcr"] < 0.04:
+        reasons.append("low zero-crossing rate")
+
+    if raw["spectral_centroid"] < 1500:
+        reasons.append("limited spectral variation")
+
+    if not reasons:
+        reasons.append("natural vocal variations")
+
+    if label == "AI_GENERATED":
+        return (
+            "AI-generated speech characteristics detected: "
+            + ", ".join(reasons)
+            + ". These patterns are common in synthesized voices."
+        )
+
+    return (
+        "Human speech characteristics detected: "
+        + ", ".join(reasons)
+        + ". Natural voice fluctuations indicate a real human speaker."
+    )
 
 
 @app.post("/api/voice-detection")
 def detect_voice(
-    payload: dict,
-    x_api_key: str = Header(None, alias="x-api-key")  # 🔴 THIS IS THE FIX
+    req: VoiceRequest,
+    x_api_key: str = Header(None)
 ):
-    # -------- DEBUG (KEEP THIS FOR NOW) --------
-    print("HEADER RECEIVED:", x_api_key)
-    print("SERVER API KEY:", API_KEY)
-    # -------------------------------------------
+    if x_api_key != "my_voice_api_123":
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
-    # -------- API KEY CHECK --------
-    if x_api_key != API_KEY:
-        return {
-            "status": "error",
-            "message": "Invalid API key or malformed request"
-        }
-
-    # -------- PAYLOAD VALIDATION --------
-    language = payload.get("language")
-    audio_format = payload.get("audioFormat")
-    audio_base64 = payload.get("audioBase64")
-
-    if not language or not audio_format or not audio_base64:
-        return {
-            "status": "error",
-            "message": "Missing required fields"
-        }
-
-    if language not in SUPPORTED_LANGUAGES:
-        return {
-            "status": "error",
-            "message": "Unsupported language"
-        }
-
-    if audio_format.lower() != "mp3":
-        return {
-            "status": "error",
-            "message": "Only mp3 format supported"
-        }
-
-    # -------- AUDIO PROCESSING --------
     try:
-        audio_bytes = base64.b64decode(audio_base64)
+        audio_bytes = base64.b64decode(req.audioBase64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 audio")
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
-            tmp.write(audio_bytes)
-            audio_path = tmp.name
+    with tempfile.NamedTemporaryFile(suffix="." + req.audioFormat, delete=False) as f:
+        f.write(audio_bytes)
+        audio_path = f.name
 
-        features = extract_features(audio_path)
-        os.remove(audio_path)
+    features, raw = extract_features(audio_path, return_raw=True)
+    features = np.array(features).reshape(1, -1)
 
-        model = load_model()
-        prediction = model.predict(features)[0]
-        confidence = float(model.predict_proba(features)[0].max())
+    probs = model.predict_proba(features)[0]
+    ai_conf = probs[1]
+    human_conf = probs[0]
 
-        return {
-            "status": "success",
-            "language": language,
-            "classification": "AI_GENERATED" if prediction == 1 else "HUMAN",
-            "confidenceScore": round(confidence, 2),
-            "explanation": "Unnatural pitch consistency detected"
-        }
+    label = "AI_GENERATED" if ai_conf > human_conf else "HUMAN"
+    confidence = float(max(ai_conf, human_conf))
+    reason = generate_reason(label, raw)
 
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+    return {
+        "prediction": label,
+        "confidence": round(confidence, 3),
+        "reason": reason
+    }

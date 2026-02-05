@@ -1,56 +1,53 @@
 import os
-import librosa
 import numpy as np
-import pickle
+import joblib
 from sklearn.ensemble import RandomForestClassifier
+from voice_ai_detector.model import extract_features
 
-BASE_DIR = os.path.dirname(__file__)
-DATA_DIR = os.path.join(BASE_DIR, "data")
-HUMAN_DIR = os.path.join(DATA_DIR, "human")
-AI_DIR = os.path.join(DATA_DIR, "ai")
+X = []
+y = []
 
-MODEL_PATH = os.path.join(BASE_DIR, "voice_ai_detector", "model.pkl")
+DATASET = [
+    (1, "data/ai"),
+    (0, "data/human")
+]
 
-def extract_features(path):
-    y, sr = librosa.load(path, sr=None)
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
-    zcr = librosa.feature.zero_crossing_rate(y)
-    sc = librosa.feature.spectral_centroid(y=y, sr=sr)
+for label, base_folder in DATASET:
+    for lang in os.listdir(base_folder):
+        lang_path = os.path.join(base_folder, lang)
 
-    return np.hstack([
-        np.mean(mfcc, axis=1),
-        np.mean(zcr),
-        np.mean(sc)
-    ])
+        if not os.path.isdir(lang_path):
+            continue
 
-def load_data(folder, label):
-    X, y = [], []
-    for root, _, files in os.walk(folder):
-        for file in files:
-            if file.lower().endswith(".wav"):
-                path = os.path.join(root, file)
-                try:
-                    X.append(extract_features(path))
-                    y.append(label)
-                    print("Loaded:", path)
-                except Exception as e:
-                    print("Skipped:", path, e)
-    return X, y
+        print(f"Processing {lang_path}")
 
-print("Loading human samples...")
-Xh, yh = load_data(HUMAN_DIR, 0)
+        for file in os.listdir(lang_path):
+            if not file.lower().endswith((".wav", ".mp3")):
+                continue
 
-print("Loading AI samples...")
-Xa, ya = load_data(AI_DIR, 1)
+            path = os.path.join(lang_path, file)
 
-X = Xh + Xa
-y = yh + ya
+            try:
+                features = extract_features(path)
+                X.append(features)
+                y.append(label)
+            except Exception as e:
+                print("Error:", path, e)
 
-print("Training model...")
-model = RandomForestClassifier(n_estimators=100)
+X = np.array(X)
+y = np.array(y)
+
+if len(X) == 0:
+    raise RuntimeError("❌ No audio files found")
+
+model = RandomForestClassifier(
+    n_estimators=400,
+    max_depth=30,
+    random_state=42
+)
+
 model.fit(X, y)
 
-with open(MODEL_PATH, "wb") as f:
-    pickle.dump(model, f)
+joblib.dump(model, "voice_ai_detector/model.pkl")
+print("✅ Model trained and saved")
 
-print("✅ Model saved at:", MODEL_PATH)
